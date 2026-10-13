@@ -1,0 +1,791 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="description" content="How Duelyst's rules engine, cards, bosses and economy actually work, read from its unbundled JavaScript. Interactive board and engine replay.">
+<title>Duelyst dissected</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Pixelify+Sans:wght@500;700&family=Atkinson+Hyperlegible:ital,wght@0,400;0,700;1,400&family=JetBrains+Mono:wght@400;600&display=swap">
+<style>
+/* Layout: one 68ch reading column, figures run out to 1080px; dark-first, warm ramp amber→rose→prune→indigo */
+:root {
+  --bg: #120e14; --surface: #1c1620; --surface-2: #251d2a; --line: #3d3040;
+  --fg: #efe6ea; --muted: #a9989f;
+  --amber: #f0a24a; --rose: #ec5f84; --prune: #b06aa3; --indigo: #8a8cf0;
+  --f-display: "Pixelify Sans", "Courier New", monospace;
+  --f-body: "Atkinson Hyperlegible", "Segoe UI", system-ui, sans-serif;
+  --f-mono: "JetBrains Mono", Consolas, "Courier New", monospace;
+  color-scheme: dark;
+}
+@media (prefers-color-scheme: light) { :root:not([data-theme="dark"]) {
+  --bg: #f6f2f5; --surface: #ffffff; --surface-2: #efe7ee; --line: #d8cad5;
+  --fg: #1d1520; --muted: #6a5864;
+  --amber: #8f4c0e; --rose: #c02c55; --prune: #7c3a72; --indigo: #3d3fb2; color-scheme: light } }
+:root[data-theme="light"] {
+  --bg: #f6f2f5; --surface: #ffffff; --surface-2: #efe7ee; --line: #d8cad5;
+  --fg: #1d1520; --muted: #6a5864;
+  --amber: #8f4c0e; --rose: #c02c55; --prune: #7c3a72; --indigo: #3d3fb2; color-scheme: light }
+
+* { box-sizing: border-box }
+body { background: var(--bg); color: var(--fg); font: 17px/1.6 var(--f-body); padding-inline: 16px; padding-block: 0 64px }
+.wrap { max-width: 1080px; margin: 0 auto }
+.col { max-width: 68ch }
+h1, h2, h3 { font-family: var(--f-display); font-weight: 700; text-wrap: balance; line-height: 1.15; margin: 0 }
+h1 { font-size: clamp(2.2rem, 6vw, 3.6rem); letter-spacing: .01em }
+h2 { font-size: clamp(1.5rem, 3.4vw, 2rem); margin-top: 8px }
+h3 { font-size: 1.15rem; font-weight: 500; color: var(--amber) }
+p { margin: 0 }
+code, .mono { font-family: var(--f-mono); font-size: .86em }
+a { color: var(--indigo) }
+:focus-visible { outline: 2px solid var(--amber); outline-offset: 2px }
+
+.ramp { height: 4px; border-radius: 2px; background: linear-gradient(90deg, var(--amber), var(--rose) 40%, var(--prune) 70%, var(--indigo)) }
+header.hero { padding-block: 48px 32px; display: grid; gap: 20px }
+.eyebrow { font-family: var(--f-mono); font-size: .78rem; letter-spacing: .08em; text-transform: uppercase; color: var(--muted) }
+.lede { font-size: 1.15rem; color: var(--fg) }
+.stats { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 12px; margin-top: 8px }
+.stat { border-top: 1px solid var(--line); padding-top: 10px }
+.stat b { display: block; font-family: var(--f-display); font-size: 2rem; font-weight: 500; font-variant-numeric: tabular-nums; color: var(--amber) }
+.stat span { font-size: .9rem; color: var(--muted) }
+
+nav.toc { display: flex; flex-wrap: wrap; gap: 8px 18px; font-family: var(--f-mono); font-size: .85rem; padding-block: 12px; border-block: 1px solid var(--line); position: sticky; top: env(safe-area-inset-top, 0px); background: var(--bg); z-index: 2 }
+nav.toc a { color: var(--muted); text-decoration: none }
+nav.toc a:hover { color: var(--fg) }
+
+section { padding-block: 56px 8px; display: grid; gap: 20px; scroll-margin-top: 56px }
+.num { font-family: var(--f-mono); color: var(--rose); font-size: .85rem }
+
+.chip { font-family: var(--f-mono); font-size: .76rem; padding: 1px 6px; border-radius: 4px; vertical-align: 1px; white-space: nowrap }
+.lu { background: color-mix(in srgb, var(--indigo) 18%, transparent); color: var(--indigo) }
+.ded { background: color-mix(in srgb, var(--amber) 18%, transparent); color: var(--amber) }
+
+ul.facts { list-style: none; padding: 0; margin: 0; display: grid; gap: 10px }
+ul.facts li { padding-left: 18px; position: relative }
+ul.facts li::before { content: ""; position: absolute; left: 0; top: .62em; width: 8px; height: 8px; background: var(--prune) }
+
+figure { margin: 0; display: grid; gap: 10px }
+.scroll { overflow-x: auto; border: 1px solid var(--line); border-radius: 8px; background: var(--surface); padding: 12px }
+.scroll svg { display: block; width: 100%; height: auto; color: var(--muted) }
+figcaption { font-size: .9rem; color: var(--muted); max-width: 72ch }
+
+svg text { fill: var(--fg); font-family: var(--f-body); font-size: 13px }
+svg .sub { fill: var(--muted); font-size: 12px; font-family: var(--f-mono) }
+svg .lbl { fill: var(--muted); font-size: 12.5px }
+svg .box { fill: var(--surface-2); stroke: var(--line); stroke-width: 1.2 }
+svg .hot { stroke: var(--rose); stroke-width: 2 }
+svg .warn { stroke: var(--amber); stroke-width: 2; stroke-dasharray: 5 4 }
+svg .void { stroke-dasharray: 5 4 }
+svg .edge { stroke: currentColor; stroke-width: 1.4; fill: none }
+svg .group { fill: none; stroke: var(--line); stroke-width: 1.2; stroke-dasharray: 6 5 }
+svg .band-e { fill: color-mix(in srgb, var(--indigo) 12%, transparent) }
+svg .band-m { fill: color-mix(in srgb, var(--prune) 14%, transparent) }
+svg .band-h { fill: color-mix(in srgb, var(--rose) 14%, transparent) }
+svg .curve { stroke: var(--amber); stroke-width: 3.5; fill: none; stroke-linecap: round }
+svg .axis { stroke: var(--line); stroke-width: 1 }
+svg .bit { fill: var(--surface-2); stroke: var(--line) }
+svg .bit-on { fill: color-mix(in srgb, var(--rose) 30%, var(--surface-2)); stroke: var(--rose) }
+
+.grid2 { display: grid; grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)); gap: 24px; align-items: start }
+.grid2 > * { min-width: 0 }
+.tablewrap { overflow-x: auto }
+table { border-collapse: collapse; width: 100%; font-size: .92rem; font-variant-numeric: tabular-nums }
+th, td { text-align: left; padding: 7px 10px; border-bottom: 1px solid var(--line); vertical-align: top }
+th { font-family: var(--f-mono); font-size: .75rem; letter-spacing: .05em; text-transform: uppercase; color: var(--muted); font-weight: 600 }
+td.n { text-align: right; font-family: var(--f-mono); font-size: .86rem }
+
+ol.steps { list-style: none; counter-reset: s; padding: 0; margin: 0; display: grid; grid-template-columns: repeat(auto-fit, minmax(160px, 1fr)); gap: 10px }
+ol.steps li { counter-increment: s; background: var(--surface); border: 1px solid var(--line); border-radius: 8px; padding: 12px; display: grid; gap: 4px; font-size: .9rem }
+ol.steps li::before { content: counter(s); font-family: var(--f-display); color: var(--rose); font-size: 1.3rem; line-height: 1 }
+ol.steps li b { font-family: var(--f-mono); font-size: .82rem; font-weight: 600 }
+ol.steps li.alert { border-color: var(--amber) }
+
+.callout { border-left: 3px solid var(--rose); padding: 4px 0 4px 16px; font-size: 1.05rem }
+
+.lessons { display: grid; grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)); gap: 28px }
+.lessons > div { min-width: 0; display: grid; gap: 12px; align-content: start }
+.lessons ol { margin: 0; padding-left: 1.3em; display: grid; gap: 10px }
+.lessons li::marker { font-family: var(--f-mono); color: var(--muted) }
+.lessons .bad h3 { color: var(--rose) }
+.lessons .ok h3 { color: var(--indigo) }
+.lessons small { color: var(--muted); font-family: var(--f-mono); font-size: .8rem }
+
+footer { margin-top: 64px; padding-top: 20px; border-top: 1px solid var(--line); color: var(--muted); font-size: .88rem; display: grid; gap: 8px }
+@media (prefers-reduced-motion: no-preference) { html { scroll-behavior: smooth } }
+</style>
+<style>html{padding-top:env(safe-area-inset-top,0px);padding-bottom:env(safe-area-inset-bottom,0px)} img{max-width:100%}</style>
+</head>
+<body>
+
+
+<style>
+svg .tile { fill: var(--surface-2); stroke: var(--line) }
+svg .move { fill: color-mix(in srgb, var(--indigo) 28%, var(--surface-2)); stroke: var(--indigo) }
+svg .reach { fill: color-mix(in srgb, var(--rose) 22%, var(--surface-2)); stroke: var(--rose) }
+svg .spring { fill: color-mix(in srgb, var(--amber) 35%, var(--surface-2)); stroke: var(--amber); stroke-width: 1.6 }
+svg .gen { fill: var(--prune) }
+svg .dot { fill: var(--rose) }
+svg .dot2 { fill: var(--indigo) }
+svg .line2 { stroke: var(--indigo); stroke-width: 3; fill: none; stroke-linecap: round }
+svg .rule { stroke: var(--muted); stroke-width: 1.4; stroke-dasharray: 6 5; fill: none }
+td.score { font-family: var(--f-display); color: var(--amber); white-space: nowrap }
+
+.board-wrap { display: grid; grid-template-columns: minmax(0, 520px) minmax(0, 1fr); gap: 24px; align-items: start }
+@media (max-width: 760px) { .board-wrap { grid-template-columns: minmax(0, 1fr) } }
+.bd { display: grid; grid-template-columns: repeat(9, 1fr); gap: 3px; background: var(--line); padding: 3px; border-radius: 8px }
+.bd button { aspect-ratio: 1; min-width: 0; border: 0; padding: 0; background: var(--surface-2); color: var(--fg); font: 600 .72rem/1 var(--f-mono); cursor: pointer; position: relative; display: grid; place-items: center; border-radius: 3px }
+.bd button.spring::after { content: ""; position: absolute; inset: 22%; border-radius: 50%; border: 2px solid var(--amber); opacity: .8; pointer-events: none }
+.bd button.mv { background: color-mix(in srgb, var(--indigo) 30%, var(--surface-2)) }
+.bd button.atk { background: color-mix(in srgb, var(--rose) 40%, var(--surface-2)) }
+.bd button.sel { outline: 2px solid var(--amber); outline-offset: -2px }
+.bd .u { width: 78%; height: 78%; border-radius: 6px; display: grid; place-items: center; font-size: .7rem; z-index: 1 }
+.bd .p1 { background: var(--indigo); color: var(--bg) }
+.bd .p2 { background: var(--rose); color: var(--bg) }
+.bd .gen { border-radius: 50% }
+.bd-axis { display: grid; grid-template-columns: repeat(9, 1fr); padding: 2px 3px; font: .7rem var(--f-mono); color: var(--muted); text-align: center }
+.panel { background: var(--surface); border: 1px solid var(--line); border-radius: 8px; padding: 16px; display: grid; gap: 10px; min-width: 0 }
+.panel h3 { margin: 0 }
+.panel .kw { display: flex; flex-wrap: wrap; gap: 6px }
+.panel .kw span { font: .75rem var(--f-mono); border: 1px solid var(--line); border-radius: 4px; padding: 1px 6px }
+.panel .why { font-size: .95rem }
+.panel .legend { display: grid; gap: 4px; font-size: .85rem; color: var(--muted) }
+.panel .legend i { display: inline-block; width: 12px; height: 12px; border-radius: 2px; vertical-align: -1px; margin-right: 6px }
+.btn { font: 600 .82rem var(--f-mono); background: var(--surface-2); color: var(--fg); border: 1px solid var(--line); border-radius: 6px; padding: 7px 12px; cursor: pointer }
+.btn:hover { border-color: var(--amber) }
+.btn[aria-pressed="true"] { border-color: var(--amber); color: var(--amber) }
+.btn:disabled { opacity: .4; cursor: default }
+.replay { background: var(--surface); border: 1px solid var(--line); border-radius: 8px; padding: 16px; display: grid; gap: 14px }
+.rp-tabs, .rp-ctl { display: flex; flex-wrap: wrap; gap: 8px; align-items: center }
+.rp-ctl .count { font: .82rem var(--f-mono); color: var(--muted); margin-left: auto }
+.rp-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); gap: 16px }
+.rp-grid > div { min-width: 0; display: grid; gap: 8px; align-content: start }
+.rp-ev { font: 600 .9rem var(--f-mono); color: var(--rose) }
+.rp-note { font-size: 1rem; min-height: 4.8em }
+.rp-h { font: .72rem var(--f-mono); letter-spacing: .08em; text-transform: uppercase; color: var(--muted) }
+.rp-q { display: flex; flex-wrap: wrap; gap: 6px; min-height: 30px }
+.rp-q span { font: .78rem var(--f-mono); padding: 4px 8px; border-radius: 4px; background: var(--surface-2); border: 1px solid var(--line) }
+.rp-q span.run { border-color: var(--amber); color: var(--amber) }
+.rp-q em { font: .82rem var(--f-mono); color: var(--muted); font-style: normal }
+.rp-tree { font: .8rem/1.6 var(--f-mono); white-space: pre; overflow-x: auto; margin: 0; background: var(--surface-2); border-radius: 6px; padding: 8px 10px; min-height: 5.5em }
+.rp-units { display: flex; flex-wrap: wrap; gap: 8px }
+.rp-units div { border: 1px solid var(--line); border-radius: 6px; padding: 6px 10px; font-size: .85rem; display: grid; gap: 2px }
+.rp-units b { font-family: var(--f-mono); font-variant-numeric: tabular-nums }
+.rp-units .hit b { color: var(--rose) }
+.rp-units .gone { opacity: .55; border-style: dashed }
+</style>
+
+<div class="wrap">
+
+<header class="hero">
+  <div class="eyebrow">Reverse engineering · Electron 1.2.3 · browserify bundle · 13 October 2026</div>
+  <h1>Duelyst dissected</h1>
+  <div class="ramp" aria-hidden="true"></div>
+  <p class="lede col">How Duelyst runs its turns, its cards, its bosses and its economy, read straight from its own code. A store of ideas and pitfalls for a tactics game played with cards on a grid.</p>
+  <div class="stats">
+    <div class="stat"><b>2,156</b><span>modules recovered, with their paths</span></div>
+    <div class="stat"><b>1,345</b><span>files of rules engine, full bodies</span></div>
+    <div class="stat"><b>819</b><span>playable cards, 92 tokens</span></div>
+    <div class="stat"><b>~344</b><span>modifier classes doing all the work</span></div>
+  </div>
+  <p class="col" style="font-size:.92rem;color:var(--muted)">Every claim carries its source: <span class="chip lu">read</span> means read in the code or produced by running it, <span class="chip ded">inferred</span> means interpreted. Unlike the Unity decompiles, this one has every method body. Only the variable names are minified.</p>
+</header>
+
+<nav class="toc" aria-label="Contents">
+  <a href="#extraction">Extraction</a><a href="#board">Board &amp; turn</a><a href="#engine">Engine</a><a href="#cards">Cards</a><a href="#opponents">Opponents</a><a href="#meta">Meta</a><a href="#takeaways">Lessons</a><a href="#unknowns">Unknowns</a>
+</nav>
+
+<!-- EXTRACTION -->
+<section id="extraction">
+  <span class="num">01</span>
+  <h2>What came out of the game</h2>
+  <p class="col">Duelyst on Steam is a web page in an Electron shell. All of the game code sits in one 10.6&nbsp;MB line of minified JavaScript. Browserify keeps every module as a function in a big table, so the table can be read without running the game.</p>
+  <figure>
+    <div class="scroll">
+      <svg viewBox="0 0 900 320" style="min-width:760px" role="img" aria-label="Extraction chain: unbundle.js evaluates only the module table of duelyst.js and writes 2,156 modules to src; catalogue.js re-evaluates the bundle and runs the game's own SDK headless to produce cartes.csv; simulate.js runs real games for traces; the server code was never shipped.">
+        <defs><marker id="a1" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="currentColor"/></marker></defs>
+        <rect class="box" x="20" y="40" width="170" height="70" rx="6"/>
+        <text x="105" y="70" text-anchor="middle">duelyst.js</text>
+        <text class="sub" x="105" y="90" text-anchor="middle">10.6 MB, one line</text>
+        <rect class="box hot" x="240" y="40" width="170" height="70" rx="6"/>
+        <text x="325" y="70" text-anchor="middle">unbundle.js</text>
+        <text class="sub" x="325" y="90" text-anchor="middle">vm: table only</text>
+        <rect class="box" x="460" y="40" width="170" height="70" rx="6"/>
+        <text x="545" y="70" text-anchor="middle">src/ 2,156 modules</text>
+        <text class="sub" x="545" y="90" text-anchor="middle">app/sdk = rules</text>
+        <rect class="box" x="690" y="40" width="190" height="70" rx="6"/>
+        <text x="785" y="70" text-anchor="middle">4 design specs</text>
+        <text class="sub" x="785" y="90" text-anchor="middle">read from src</text>
+        <rect class="box hot" x="460" y="160" width="170" height="60" rx="6"/>
+        <text x="545" y="186" text-anchor="middle">catalogue.js</text>
+        <text class="sub" x="545" y="205" text-anchor="middle">simulate.js</text>
+        <rect class="box" x="690" y="160" width="190" height="60" rx="6"/>
+        <text x="785" y="186" text-anchor="middle">cartes.csv · 2,378 rows</text>
+        <text class="sub" x="785" y="205" text-anchor="middle">simulate_out.txt</text>
+        <rect class="box void" x="20" y="250" width="390" height="54" rx="6"/>
+        <text x="215" y="274" text-anchor="middle">Server code: never shipped</text>
+        <text class="sub" x="215" y="292" text-anchor="middle">practice AI · reward rolls · orb odds · matchmaking</text>
+        <g class="edge" style="color:var(--muted)">
+          <line x1="190" y1="75" x2="236" y2="75" marker-end="url(#a1)"/>
+          <line x1="410" y1="75" x2="456" y2="75" marker-end="url(#a1)"/>
+          <line x1="630" y1="75" x2="686" y2="75" marker-end="url(#a1)"/>
+          <path d="M105,110 V190 H456" marker-end="url(#a1)"/>
+          <line x1="630" y1="190" x2="686" y2="190" marker-end="url(#a1)"/>
+        </g>
+        <text class="lbl" x="213" y="66" text-anchor="middle">reads</text>
+        <text class="lbl" x="433" y="66" text-anchor="middle">writes</text>
+        <text class="lbl" x="280" y="182" text-anchor="middle">re-evaluates, runs the real SDK</text>
+        <text class="lbl" x="658" y="182" text-anchor="middle">dumps</text>
+      </svg>
+    </div>
+    <figcaption>The module table is a plain object literal. Evaluating it in a sandbox creates the functions without calling any of them, and <code>fn.toString()</code> returns each module's source. Module paths come from the require maps.</figcaption>
+  </figure>
+  <ul class="facts col">
+    <li>The game is CoffeeScript compiled to JS. With a 10-line <code>require</code>, the rules engine boots in Node and the game computes its own card stats and text. <span class="chip lu">read</span></li>
+    <li>Two loader traps: aliased modules call <code>arguments[4][id][0].apply(…)</code>, so they need all 7 browserify arguments, and an unknown require name falls back to a module id. <span class="chip lu">read</span></li>
+    <li>Only the server ever made decisions with hidden information: the practice AI, boss decks, reward rolls, pack odds. The client asks for them by API. <span class="chip lu">read</span></li>
+  </ul>
+</section>
+
+<!-- BOARD -->
+<section id="board">
+  <span class="num">02</span>
+  <h2>A 9 × 5 board, two Generals, three springs</h2>
+  <p class="col">Both players are Generals standing on the board (2 attack, 25 HP). They can move, attack and be attacked like any minion. If a General dies, that player loses.</p>
+  <figure>
+    <div class="board-wrap">
+      <div>
+        <div class="bd" id="bd" role="grid" aria-label="Duelyst board, 9 by 5. Select a unit to see where it can move and what it can attack."></div>
+        <div class="bd-axis" aria-hidden="true"><span>0</span><span>1</span><span>2</span><span>3</span><span>4</span><span>5</span><span>6</span><span>7</span><span>8</span></div>
+      </div>
+      <div class="panel" aria-live="polite">
+        <div class="eyebrow" id="pn-side">Selected</div>
+        <h3 id="pn-name">—</h3>
+        <div class="mono" id="pn-stats"></div>
+        <div class="kw" id="pn-kw"></div>
+        <p class="why" id="pn-why"></p>
+        <div class="legend">
+          <span><i style="background:color-mix(in srgb, var(--indigo) 30%, var(--surface-2))"></i>can move here (click to move)</span>
+          <span><i style="background:color-mix(in srgb, var(--rose) 40%, var(--surface-2))"></i>can attack this unit</span>
+          <span><i style="border:2px solid var(--amber);border-radius:50%"></i>mana spring</span>
+        </div>
+        <div><button class="btn" id="bd-reset" type="button">Reset board</button></div>
+      </div>
+    </div>
+    <figcaption>Click any unit. Blue units are player 1, red are player 2, round ones are Generals. Movement, reach, Flying, Ranged and Provoke follow the engine's rules: a 2-step search through allies, melee reach on the 8 surrounding tiles, and Provoke freezing every enemy next to it. Turn order and mana are left out.</figcaption>
+  </figure>
+  <ol class="steps">
+    <li><b>Start of turn</b>Mana refills to its cap (+1 per turn, max 9). On turns 4, 8 and 12 (P2: 5, 9, 13), then every turn, the Bloodbound Spell is ready.</li>
+    <li><b>Act</b>Each unit can move then attack, but attacking uses up the move. Cards cost mana. One replace per turn.</li>
+    <li><b>Replace</b>One card back into the deck. The new draw is guaranteed to be a different card.</li>
+    <li class="alert"><b>End of turn</b>You draw now, not at the start, so you plan the next turn with your full hand. Drawing from an empty deck deals 2 to your General.</li>
+  </ol>
+  <ul class="facts col">
+    <li>The deck is never shuffled. Each draw picks a random card from the pile on the server, so there is no deck order that could leak. <span class="chip lu">read</span></li>
+    <li>The (5,2) spring sits one column closer to player 2, who also starts with 3 mana instead of 2. Springs give +1 mana once, then disappear. <span class="chip lu">read</span></li>
+    <li>The turn timer is 90 s plus 2 s for latency. When it runs out, only End Turn is valid. <span class="chip lu">read</span></li>
+    <li>A safety rail: once 10 cards have been played in one turn with no damage dealt, playing another card is invalid. <span class="chip lu">read</span></li>
+  </ul>
+</section>
+
+<!-- ENGINE -->
+<section id="engine">
+  <span class="num">03</span>
+  <h2>Everything is an action, everything that reacts is a modifier</h2>
+  <p class="col">The engine has one loop. Every change to the game is an Action, and every rule that reacts to one is a Modifier listening for events. That includes the counterattack: every unit carries a hidden <code>ModifierStrikeback</code>.</p>
+  <figure>
+    <div class="scroll">
+      <svg viewBox="0 0 900 320" style="min-width:780px" role="img" aria-label="The action pipeline: a player input is validated by validators and modifiers; a valid action starts a step and a FIFO queue; each action fires before_action, executes, then fires action and after_action; reactions are appended to the end of the queue; when the queue drains, cleanup, auras and Opening Gambits may queue more; then the server records the step and clients replay it.">
+        <defs><marker id="a2" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="currentColor"/></marker></defs>
+        <rect class="box" x="20" y="50" width="150" height="60" rx="6"/>
+        <text x="95" y="76" text-anchor="middle">Player input</text>
+        <text class="sub" x="95" y="95" text-anchor="middle">move · attack · play</text>
+        <rect class="box" x="210" y="50" width="170" height="60" rx="6"/>
+        <text x="295" y="76" text-anchor="middle">validate_action</text>
+        <text class="sub" x="295" y="95" text-anchor="middle">validators + modifiers</text>
+        <rect class="box warn" x="210" y="150" width="170" height="44" rx="6"/>
+        <text x="295" y="177" text-anchor="middle">invalid: message + tile</text>
+        <rect class="box" x="420" y="50" width="150" height="60" rx="6"/>
+        <text x="495" y="76" text-anchor="middle">Step + queue</text>
+        <text class="sub" x="495" y="95" text-anchor="middle">FIFO</text>
+        <rect class="box hot" x="610" y="40" width="270" height="80" rx="6"/>
+        <text x="745" y="66" text-anchor="middle">Run the head action</text>
+        <text class="sub" x="745" y="86" text-anchor="middle">before_action → _execute</text>
+        <text class="sub" x="745" y="104" text-anchor="middle">→ action → after_action</text>
+        <rect class="box" x="610" y="230" width="270" height="80" rx="6"/>
+        <text x="745" y="256" text-anchor="middle">Queue drained: resolve</text>
+        <text class="sub" x="745" y="276" text-anchor="middle">cleanup_action · auras</text>
+        <text class="sub" x="745" y="294" text-anchor="middle">Opening Gambits fire here</text>
+        <rect class="box" x="380" y="240" width="150" height="60" rx="6"/>
+        <text x="455" y="266" text-anchor="middle">End step</text>
+        <text class="sub" x="455" y="285" text-anchor="middle">server records it</text>
+        <rect class="box" x="60" y="240" width="240" height="60" rx="6"/>
+        <text x="180" y="266" text-anchor="middle">Clients replay sub-actions</text>
+        <text class="sub" x="180" y="285" text-anchor="middle">no RNG, no hidden cards</text>
+        <g class="edge">
+          <line x1="170" y1="80" x2="206" y2="80" marker-end="url(#a2)"/>
+          <line x1="380" y1="80" x2="416" y2="80" marker-end="url(#a2)"/>
+          <line x1="295" y1="110" x2="295" y2="146" marker-end="url(#a2)"/>
+          <line x1="570" y1="80" x2="606" y2="80" marker-end="url(#a2)"/>
+          <path d="M760,40 V18 H495 V46" marker-end="url(#a2)"/>
+          <line x1="745" y1="120" x2="745" y2="226" marker-end="url(#a2)"/>
+          <path d="M650,230 V150 H520 V114" marker-end="url(#a2)"/>
+          <line x1="610" y1="270" x2="534" y2="270" marker-end="url(#a2)"/>
+          <line x1="380" y1="270" x2="304" y2="270" marker-end="url(#a2)"/>
+        </g>
+        <text class="lbl" x="398" y="70" text-anchor="middle">valid</text>
+        <text class="lbl" x="305" y="134">vetoed</text>
+        <text class="lbl" x="628" y="13" text-anchor="middle">reactions go to the end of the queue</text>
+        <text class="lbl" x="755" y="178">last one left</text>
+        <text class="lbl" x="585" y="166" text-anchor="middle">may queue more</text>
+        <text class="lbl" x="572" y="262" text-anchor="middle">empty</text>
+        <text class="lbl" x="342" y="262" text-anchor="middle">socket</text>
+      </svg>
+    </div>
+    <figcaption>The counterattack is queued during the attack's <code>before_action</code>, so the defender hits back even when the first hit kills it. That gives simultaneous combat with no special case. Counterattacks are implicit attacks, and implicit attacks never trigger a counter, so it can't loop.</figcaption>
+  </figure>
+  <h3>Watch it run</h3>
+  <figure>
+    <div class="replay">
+      <div class="rp-tabs" role="group" aria-label="Choose a trace">
+        <button class="btn" type="button" data-rp="0" aria-pressed="true">Attack and counterattack</button>
+        <button class="btn" type="button" data-rp="1" aria-pressed="false">Spell kills a Dying Wish minion</button>
+      </div>
+      <div class="rp-grid">
+        <div>
+          <div class="rp-ev" id="rp-ev"></div>
+          <p class="rp-note" id="rp-note"></p>
+          <div class="rp-h">Units</div>
+          <div class="rp-units" id="rp-units"></div>
+        </div>
+        <div>
+          <div class="rp-h">Action queue (first runs next)</div>
+          <div class="rp-q" id="rp-q"></div>
+          <div class="rp-h">Action tree so far</div>
+          <pre class="rp-tree" id="rp-tree"></pre>
+        </div>
+      </div>
+      <div class="rp-ctl">
+        <button class="btn" type="button" id="rp-prev">← Back</button>
+        <button class="btn" type="button" id="rp-next">Next →</button>
+        <span class="count" id="rp-count"></span>
+      </div>
+    </div>
+    <figcaption>Two real traces, recorded by running the game's own engine in Node (<code>simulate.js</code>). Every step below is an event the engine fired, in the order it fired them. Only the wording is ours.</figcaption>
+  </figure>
+  <div class="grid2">
+    <ul class="facts">
+      <li><b>Breadth-first by default.</b> A reaction runs after everything already in the queue. A few bookkeeping actions (apply or remove a modifier) are marked <code>isDepthFirst</code> and run nested, right away. <span class="chip lu">read</span></li>
+      <li><b>Fixed listener order.</b> The current player reacts first, the General before other cards, then the rest in play order, then hand and deck. It doesn't depend on who subscribed first. <span class="chip lu">read</span></li>
+      <li><b>Dead cards keep listening</b> until the cleanup of the action that removed them. That's how a Dying Wish sees its own death. <span class="chip lu">read</span></li>
+      <li><b>No self-trigger by construction.</b> A modifier can never react to the action that created it or to that action's parents. <span class="chip lu">read</span></li>
+    </ul>
+    <ul class="facts">
+      <li><b>Puppet clients.</b> Only the server rolls dice. It records each sub-action under the event that created it. Clients run the same SDK but replay those records instead of creating actions. <span class="chip lu">read</span></li>
+      <li><b>Opponent's cards are sent as id -1.</b> Indices grow by random gaps (<code>1 + rand × 100</code>), likely so nobody can count hidden cards. <span class="chip lu">read</span> <span class="chip ded">inferred</span></li>
+      <li><b>The save format is <code>JSON.stringify(session)</code>.</b> Runtime-only state lives in a non-enumerable <code>_private</code>. Snapshot and rollback take one line each. <span class="chip lu">read</span></li>
+      <li><b>Replays</b> are just the setup plus the list of steps. A client more than 10 s behind the server's step count is flagged as out of sync. <span class="chip lu">read</span></li>
+    </ul>
+  </div>
+</section>
+
+<!-- CARDS -->
+<section id="cards">
+  <span class="num">04</span>
+  <h2>A card is a stat line plus a list of modifiers</h2>
+  <p class="col">Each set file is one long <code>if (id === …)</code> chain. A branch sets the base stats, then attaches plain objects like <code>{type: "ModifierDyingWishDrawCard"}</code>. Most of the ~344 modifier classes pair one trigger with one effect: 75 Opening Gambit variants, 45 Dying Wish, 35 that watch for summons.</p>
+  <figure>
+    <div class="scroll">
+      <svg viewBox="0 0 900 270" style="min-width:760px" role="img" aria-label="Card lifecycle: drawn from the deck at the end of your turn, played from hand for mana, applied to the board where its modifiers become active, killed by a DieAction, kept listening until cleanup so its Dying Wish fires, then gone. Replace sends a card back to the deck; cancelling a followup rolls the whole game back to a snapshot.">
+        <defs><marker id="a3" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="currentColor"/></marker></defs>
+        <rect class="box" x="20" y="50" width="110" height="56" rx="6"/><text x="75" y="83" text-anchor="middle">Deck</text>
+        <rect class="box" x="210" y="50" width="110" height="56" rx="6"/><text x="265" y="83" text-anchor="middle">Hand</text>
+        <rect class="box" x="400" y="50" width="130" height="56" rx="6"/><text x="465" y="74" text-anchor="middle">Play</text><text class="sub" x="465" y="93" text-anchor="middle">pay mana</text>
+        <rect class="box hot" x="610" y="50" width="140" height="56" rx="6"/><text x="680" y="74" text-anchor="middle">Board</text><text class="sub" x="680" y="93" text-anchor="middle">modifiers live</text>
+        <rect class="box warn" x="610" y="180" width="140" height="56" rx="6"/><text x="680" y="204" text-anchor="middle">Removed</text><text class="sub" x="680" y="223" text-anchor="middle">still listening</text>
+        <rect class="box void" x="800" y="180" width="85" height="56" rx="6"/><text x="842" y="213" text-anchor="middle">Gone</text>
+        <g class="edge">
+          <line x1="130" y1="78" x2="206" y2="78" marker-end="url(#a3)"/>
+          <line x1="320" y1="78" x2="396" y2="78" marker-end="url(#a3)"/>
+          <line x1="530" y1="78" x2="606" y2="78" marker-end="url(#a3)"/>
+          <path d="M265,106 C265,150 75,150 75,110" marker-end="url(#a3)"/>
+          <path d="M465,50 C465,24 265,24 265,46" marker-end="url(#a3)"/>
+          <line x1="680" y1="106" x2="680" y2="176" marker-end="url(#a3)"/>
+          <line x1="750" y1="208" x2="796" y2="208" marker-end="url(#a3)"/>
+        </g>
+        <text class="lbl" x="168" y="70" text-anchor="middle">draw</text>
+        <text class="sub" x="168" y="96" text-anchor="middle">end of turn</text>
+        <text class="lbl" x="358" y="70" text-anchor="middle">cast</text>
+        <text class="lbl" x="568" y="70" text-anchor="middle">apply</text>
+        <text class="lbl" x="170" y="160" text-anchor="middle">replace, 1 per turn</text>
+        <text class="lbl" x="365" y="17" text-anchor="middle">cancel followup: snapshot rollback</text>
+        <text class="lbl" x="690" y="146">DieAction</text>
+        <text class="lbl" x="773" y="200" text-anchor="middle">cleanup</text>
+        <text class="sub" x="680" y="258" text-anchor="middle">Dying Wish fires here</text>
+      </svg>
+    </div>
+    <figcaption>A multi-step card (a followup) snapshots the whole game when it is played. The next steps are free mini-cards. Cancelling restores the snapshot, so the card goes back to hand with nothing half-resolved.</figcaption>
+  </figure>
+  <div class="grid2">
+    <figure>
+      <div class="scroll">
+        <svg viewBox="0 0 660 352" role="img" aria-label="Minion stat budget by mana cost: vanilla minions follow roughly 2 times mana plus 2 stats; the average minion sits lower because each line of text costs about 2 stats.">
+          <g class="axis">
+            <line x1="60" y1="300" x2="630" y2="300"/><line x1="60" y1="40" x2="60" y2="300"/>
+            <line x1="60" y1="240.9" x2="630" y2="240.9" opacity=".4"/><line x1="60" y1="181.8" x2="630" y2="181.8" opacity=".4"/><line x1="60" y1="122.7" x2="630" y2="122.7" opacity=".4"/><line x1="60" y1="63.6" x2="630" y2="63.6" opacity=".4"/>
+          </g>
+          <g class="sub">
+            <text x="50" y="304" text-anchor="end">0</text><text x="50" y="245" text-anchor="end">5</text><text x="50" y="186" text-anchor="end">10</text><text x="50" y="127" text-anchor="end">15</text><text x="50" y="68" text-anchor="end">20</text>
+            <text x="60" y="320" text-anchor="middle">1</text><text x="140" y="320" text-anchor="middle">2</text><text x="220" y="320" text-anchor="middle">3</text><text x="300" y="320" text-anchor="middle">4</text><text x="380" y="320" text-anchor="middle">5</text><text x="460" y="320" text-anchor="middle">6</text><text x="540" y="320" text-anchor="middle">7</text><text x="620" y="320" text-anchor="middle">8</text>
+            <text x="345" y="338" text-anchor="middle">mana cost</text>
+            <text x="14" y="30">ATK + HP</text>
+          </g>
+          <line class="rule" x1="60" y1="252.7" x2="620" y2="87.3"/>
+          <polyline class="line2" points="60,246.8 140,229.1 220,199.5 300,170 380,146.4 460,114.5 540,63.6"/>
+          <polyline class="curve" points="60,259.8 140,248 220,230.3 300,212.5 380,191.3 460,172.4 540,138.1 620,144"/>
+          <g><circle class="dot2" cx="540" cy="63.6" r="4"/><circle cx="620" cy="144" r="4" style="fill:var(--amber)"/></g>
+          <text class="lbl" x="470" y="58" text-anchor="end" style="fill:var(--indigo)">vanilla (no text)</text>
+          <text class="lbl" x="612" y="120" text-anchor="end">2 × mana + 2</text>
+          <text class="lbl" x="612" y="170" text-anchor="end" style="fill:var(--amber)">all minions</text>
+        </svg>
+      </div>
+      <figcaption>Average ATK + HP per mana cost over the playable pool. Vanilla minions sit around 2 × mana + 2; each line of text costs about 2 stats. Only 1 to 3 vanilla minions exist per cost, so that line is noisy. <span class="chip lu">read</span></figcaption>
+    </figure>
+    <div class="tablewrap">
+      <table>
+        <thead><tr><th>Keyword</th><th>How it's built</th><th>Cards</th></tr></thead>
+        <tbody>
+          <tr><td>Opening Gambit</td><td>fires on activation, not on play</td><td class="n">117</td></tr>
+          <tr><td>Dying Wish</td><td>listens for its own DieAction</td><td class="n">43</td></tr>
+          <tr><td>Provoke</td><td>aura that gives neighbours "Provoked", a move/attack veto</td><td class="n">36</td></tr>
+          <tr><td>Flying</td><td>speed set to 14</td><td class="n">29</td></tr>
+          <tr><td>Ranged</td><td>reach set to the whole board</td><td class="n">23</td></tr>
+          <tr><td>Rush</td><td>not exhausted on summon</td><td class="n">17</td></tr>
+          <tr><td>Backstab</td><td>bonus damage, and this one attack can't be countered</td><td class="n">15</td></tr>
+          <tr><td>Forcefield</td><td>absorbs the first damage each turn</td><td class="n">15</td></tr>
+          <tr><td>Celerity</td><td>one extra move and attack each turn</td><td class="n">11</td></tr>
+          <tr><td>Artifact</td><td>3 charges on the General, −1 per hit taken, whatever the damage</td><td class="n">48*</td></tr>
+        </tbody>
+      </table>
+      <p style="font-size:.85rem;color:var(--muted);margin-top:8px">Playable pool, from <code>stats_cards.md</code>. *Destructible = artifacts. Movement and attack code never checks a keyword; it only reads the stats the keyword changed.</p>
+    </div>
+  </div>
+  <ul class="facts col">
+    <li>Each of the 6 factions has exactly 99 cards, 8 of them artifacts. Neutral has 225 cards, all minions. Average cost goes from 3.13 (Songhai) to 3.63 (Magmar). <span class="chip lu">read</span></li>
+    <li>Dispel removes every removable modifier, including the card's own printed text. Artifacts, tokens, Sentinels and Structures survive. Walls die, because their Wall modifier was the unit. <span class="chip lu">read</span></li>
+    <li>MECHAZ0R is a followup spell that appears once enough parts were played: <code>parts − 5 × times summoned ≥ 5</code>. <span class="chip lu">read</span></li>
+  </ul>
+</section>
+
+<!-- OPPONENTS -->
+<section id="opponents">
+  <span class="num">05</span>
+  <h2>Opponents: no AI in the box, bosses as one rule</h2>
+  <p class="callout col">The client has no decision-making AI at all: no search, no scoring. Practice and boss games are created on the server (<code>ai_general_id</code>, <code>ai_difficulty</code>) and the client only joins them. When the servers went down, the AI went with them.</p>
+  <ul class="facts col">
+    <li><b>Scripted agents</b> drive the tutorial and the puzzles. Each round has its own list of actions. Units are named by tags (<code>"general"</code>, <code>"golem"</code>), moves are relative, and the UI pulls the next action when the previous animation ends. An illegal scripted action is simply rejected, with no fallback. <span class="chip lu">read</span></li>
+    <li><b>48 puzzles</b> (3 tutorial lessons, 45 challenges across 10 gates). "Win in one turn" needs no engine rule: the opponent holds a 0-mana, 25-damage finisher aimed at your General. Ending your turn means losing. Failing rolls back to a snapshot and shows a hint picked by failure count. <span class="chip lu">read</span></li>
+    <li><b>Puzzle HP is tuned to the exact damage.</b> In "Shadow Ritual" the solution deals 3 + 6 + 2 = 11, and the enemy General has 11 HP. <span class="chip lu">read</span></li>
+    <li><b>38 bosses</b>, each a General with 1 to 3 undispellable modifiers. Archonis deals your unspent mana to you at end of turn. D3C's death is vetoed and replaced by a new General built from its parts. <span class="chip lu">read</span></li>
+  </ul>
+  <figure>
+    <div class="scroll">
+      <svg viewBox="0 0 860 230" style="min-width:720px" role="img" aria-label="Paragon of Light boss states: it gains keywords as its HP falls through 20, 15, 10 and 5, and loses them again if healed back above each threshold. It spawns at 20 of 30 HP.">
+        <defs><marker id="a4" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="currentColor"/></marker></defs>
+        <rect class="box" x="20" y="80" width="130" height="64" rx="6"/><text x="85" y="106" text-anchor="middle">HP 21–30</text><text class="sub" x="85" y="126" text-anchor="middle">no keyword</text>
+        <rect class="box hot" x="190" y="80" width="130" height="64" rx="6"/><text x="255" y="106" text-anchor="middle">HP 16–20</text><text class="sub" x="255" y="126" text-anchor="middle">Ranged</text>
+        <rect class="box" x="360" y="80" width="130" height="64" rx="6"/><text x="425" y="106" text-anchor="middle">HP 11–15</text><text class="sub" x="425" y="126" text-anchor="middle">+ Forcefield</text>
+        <rect class="box" x="530" y="80" width="130" height="64" rx="6"/><text x="595" y="106" text-anchor="middle">HP 6–10</text><text class="sub" x="595" y="126" text-anchor="middle">+ Celerity</text>
+        <rect class="box" x="700" y="80" width="130" height="64" rx="6"/><text x="765" y="106" text-anchor="middle">HP 1–5</text><text class="sub" x="765" y="126" text-anchor="middle">+ Flying</text>
+        <g class="edge">
+          <line x1="150" y1="98" x2="186" y2="98" marker-end="url(#a4)"/><line x1="320" y1="98" x2="356" y2="98" marker-end="url(#a4)"/><line x1="490" y1="98" x2="526" y2="98" marker-end="url(#a4)"/><line x1="660" y1="98" x2="696" y2="98" marker-end="url(#a4)"/>
+          <line x1="186" y1="128" x2="154" y2="128" marker-end="url(#a4)"/><line x1="356" y1="128" x2="324" y2="128" marker-end="url(#a4)"/><line x1="526" y1="128" x2="494" y2="128" marker-end="url(#a4)"/><line x1="696" y1="128" x2="664" y2="128" marker-end="url(#a4)"/>
+          <line x1="255" y1="30" x2="255" y2="76" marker-end="url(#a4)"/>
+        </g>
+        <text class="lbl" x="265" y="38">spawns at 20 / 30</text>
+        <text class="lbl" x="425" y="180" text-anchor="middle">top arrows: damage crosses a threshold · bottom arrows: healing crosses it back</text>
+        <text class="sub" x="425" y="200" text-anchor="middle">every HP change re-checks all thresholds, so a big hit can skip states</text>
+      </svg>
+    </div>
+    <figcaption>Paragon of Light keeps no phase flag. Its form is computed from current HP, so healing it undoes its keywords. <span class="chip lu">read</span></figcaption>
+  </figure>
+</section>
+
+<!-- META -->
+<section id="meta">
+  <span class="num">06</span>
+  <h2>The meta: shared SDK, server dice</h2>
+  <p class="col">The progression formulas (ranks, faction XP, quest weights, the Rift curve) live in the SDK that client and server share, so the client numbers are very likely the real ones. Anything rolled, like pack contents or Gauntlet rewards, was decided on the server.</p>
+  <figure>
+    <div class="scroll">
+      <svg viewBox="0 0 860 310" style="min-width:740px" role="img" aria-label="Meta loop: playing earns gold and faction XP; gold buys orbs and tickets; orbs fill the collection; the collection trades cards for spirit and back; the collection builds a deck that goes back to play; tickets open Gauntlet and Rift runs.">
+        <defs><marker id="a5" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="currentColor"/></marker></defs>
+        <rect class="box hot" x="20" y="130" width="150" height="56" rx="6"/><text x="95" y="155" text-anchor="middle">Play</text><text class="sub" x="95" y="174" text-anchor="middle">ranked · runs · bosses</text>
+        <rect class="box" x="240" y="30" width="130" height="56" rx="6"/><text x="305" y="63" text-anchor="middle">Gold</text>
+        <rect class="box" x="460" y="30" width="130" height="56" rx="6"/><text x="525" y="55" text-anchor="middle">Orb</text><text class="sub" x="525" y="74" text-anchor="middle">5 cards, ≥1 rare</text>
+        <rect class="box" x="240" y="110" width="130" height="50" rx="6"/><text x="305" y="140" text-anchor="middle">Ticket</text>
+        <rect class="box" x="660" y="130" width="160" height="56" rx="6"/><text x="740" y="163" text-anchor="middle">Collection</text>
+        <rect class="box" x="660" y="240" width="160" height="50" rx="6"/><text x="740" y="270" text-anchor="middle">Spirit</text>
+        <rect class="box" x="440" y="210" width="150" height="56" rx="6"/><text x="515" y="234" text-anchor="middle">Deck</text><text class="sub" x="515" y="253" text-anchor="middle">40 cards, max 3 each</text>
+        <rect class="box" x="20" y="240" width="150" height="56" rx="6"/><text x="95" y="264" text-anchor="middle">Faction XP</text><text class="sub" x="95" y="283" text-anchor="middle">Basics, then cosmetics</text>
+        <g class="edge">
+          <path d="M95,130 V58 H236" marker-end="url(#a5)"/>
+          <line x1="370" y1="58" x2="456" y2="58" marker-end="url(#a5)"/>
+          <line x1="305" y1="86" x2="305" y2="106" marker-end="url(#a5)"/>
+          <line x1="240" y1="140" x2="174" y2="150" marker-end="url(#a5)"/>
+          <path d="M590,58 H740 V126" marker-end="url(#a5)"/>
+          <line x1="725" y1="186" x2="725" y2="236" marker-end="url(#a5)"/>
+          <line x1="755" y1="240" x2="755" y2="190" marker-end="url(#a5)"/>
+          <line x1="660" y1="175" x2="594" y2="222" marker-end="url(#a5)"/>
+          <line x1="440" y1="238" x2="174" y2="172" marker-end="url(#a5)"/>
+          <line x1="95" y1="186" x2="95" y2="236" marker-end="url(#a5)"/>
+        </g>
+        <text class="lbl" x="166" y="50" text-anchor="middle">gold per win, quests</text>
+        <text class="lbl" x="413" y="50" text-anchor="middle">100 g</text>
+        <text class="lbl" x="315" y="101">150 g</text>
+        <text class="lbl" x="207" y="132" text-anchor="middle">run</text>
+        <text class="lbl" x="664" y="216" text-anchor="end">disenchant</text>
+        <text class="lbl" x="765" y="216">craft</text>
+        <text class="lbl" x="615" y="190" text-anchor="middle">build</text>
+        <text class="lbl" x="300" y="196" text-anchor="middle">queue</text>
+        <text class="lbl" x="105" y="216">10 XP win, 7 loss</text>
+      </svg>
+    </div>
+    <figcaption>Gold comes in slowly: 20 for the first win of the day, 15 per 3 wins, plus two daily quests (20 and 50). That's about 135 gold a day at a 50 % win rate. <span class="chip ded">inferred</span></figcaption>
+  </figure>
+  <div class="grid2">
+    <div class="tablewrap">
+      <table>
+        <thead><tr><th>Rarity</th><th>Craft</th><th>Disenchant</th></tr></thead>
+        <tbody>
+          <tr><td>Common</td><td class="n">40</td><td class="n">10</td></tr>
+          <tr><td>Rare</td><td class="n">100</td><td class="n">20</td></tr>
+          <tr><td>Epic</td><td class="n">350</td><td class="n">100</td></tr>
+          <tr><td>Legendary</td><td class="n">900</td><td class="n">350</td></tr>
+          <tr><td>Mythron (1 copy max)</td><td class="n">1,200</td><td class="n">0</td></tr>
+        </tbody>
+      </table>
+      <ul class="facts" style="margin-top:16px">
+        <li><b>Gauntlet:</b> pick 1 of 3 factions, then 30 picks of 1 card out of 3. The run ends at 3 losses; 7+ wins refunds the ticket. <span class="chip lu">read</span></li>
+        <li><b>Ranked:</b> rank 30 to S-Rank. No star loss in Bronze, no dropping out of a division within a season, and win streaks only count between ranks 25 and 6. <span class="chip lu">read</span></li>
+        <li>In this build, Casual and Rift are switched off and hidden, and every mode plays the Legacy format. <span class="chip lu">read</span></li>
+      </ul>
+    </div>
+    <figure>
+      <div class="scroll">
+        <svg viewBox="0 0 640 332" role="img" aria-label="Rift level curve: reaching level L takes 5 times L times L minus 1 points, from 10 points for level 2 to 660 for level 12.">
+          <g class="axis">
+            <line x1="60" y1="280" x2="620" y2="280"/><line x1="60" y1="40" x2="60" y2="280"/>
+            <line x1="60" y1="211.4" x2="620" y2="211.4" opacity=".4"/><line x1="60" y1="142.9" x2="620" y2="142.9" opacity=".4"/><line x1="60" y1="74.3" x2="620" y2="74.3" opacity=".4"/>
+          </g>
+          <g class="sub">
+            <text x="50" y="284" text-anchor="end">0</text><text x="50" y="215" text-anchor="end">200</text><text x="50" y="147" text-anchor="end">400</text><text x="50" y="78" text-anchor="end">600</text>
+            <text x="60" y="300" text-anchor="middle">1</text><text x="160" y="300" text-anchor="middle">3</text><text x="260" y="300" text-anchor="middle">5</text><text x="360" y="300" text-anchor="middle">7</text><text x="460" y="300" text-anchor="middle">9</text><text x="560" y="300" text-anchor="middle">11</text><text x="610" y="300" text-anchor="middle">12</text>
+            <text x="335" y="318" text-anchor="middle">Rift level</text>
+            <text x="14" y="30">total points</text>
+          </g>
+          <polyline class="curve" points="60,280 110,276.6 160,269.7 210,259.4 260,245.7 310,228.6 360,208 410,184 460,156.6 510,125.7 560,91.4 610,53.7"/>
+          <circle cx="610" cy="53.7" r="4" style="fill:var(--amber)"/>
+          <text class="lbl" x="600" y="44" text-anchor="end">level 12: 660</text>
+          <text class="lbl" x="120" y="250">each level costs 10 × L more</text>
+        </svg>
+      </div>
+      <figcaption>The Rift: a deck that levels. Each level grants one upgrade: swap a card for one of 6 offered. Rerolling the offer costs 25 × 2ⁿ spirit, and up to 10 offers can be banked for later runs. <span class="chip lu">read</span></figcaption>
+    </figure>
+  </div>
+</section>
+
+<!-- TAKEAWAYS -->
+<section id="takeaways">
+  <span class="num">07</span>
+  <h2>Design lessons</h2>
+  <div class="lessons">
+    <div class="ok">
+      <h3>Take</h3>
+      <ol>
+        <li><b>Card = data, behaviour = modifiers.</b> Write each trigger once and each effect once, then combine them in data. <small>cards</small></li>
+        <li><b>Keywords as stat presets.</b> Flying is speed 14, Ranged is reach ∞. The movement code never asks "does it fly?". <small>cards</small></li>
+        <li><b>Every "you can't" is a veto.</b> Provoke, Stun and Spellward all invalidate an action with a message and a tile. Error feedback comes for free. <small>engine</small></li>
+        <li><b>Counter queued before the hit</b> gives simultaneous combat with no special case, and Backstab is just one flag on the attack. <small>engine</small></li>
+        <li><b>FIFO queue, fixed listener order, no self-trigger.</b> Trigger order you can explain to a player. <small>engine</small></li>
+        <li><b>Store damage, derive HP</b> (HP = max − damage). Removing a +2 HP buff is then always correct. <small>engine</small></li>
+        <li><b>The whole game state is one JSON.</b> Save, snapshot, rollback and network all use the same format. <small>engine</small></li>
+        <li><b>Puzzles with no special rules.</b> A scripted finisher, a snapshot, graded hints. <small>opponents</small></li>
+        <li><b>Boss = a General + one generic rule.</b> Forms computed from HP, phase 2 by vetoing the death. <small>opponents</small></li>
+        <li><b>Rift: the deck as a character.</b> An upgrade per level, a doubling reroll cost, a bank of offers. <small>meta</small></li>
+        <li><b>Draw at end of turn</b> and one replace per turn that never gives the same card back. <small>board</small></li>
+      </ol>
+    </div>
+    <div class="bad">
+      <h3>Avoid</h3>
+      <ol>
+        <li><b>The AI behind an API.</b> It died with the servers. An opponent that must outlive the servers belongs in the build. <small>opponents</small></li>
+        <li><b>A global session singleton.</b> It makes it hard to simulate futures for an AI or run tests. Pass the session explicitly. <small>engine</small></li>
+        <li><b>Two parallel cause trees</b> (parent and resolve-parent) plus a trigger stack. Design one causal link. <small>engine</small></li>
+        <li><b>No seeded RNG.</b> Replays can't be checked offline. With integer state, seeding is cheap. <small>engine</small></li>
+        <li><b>Stacking keyed on description text.</b> Rewording a card can change how it plays. Key stacks on data. <small>cards</small></li>
+        <li><b>Hand-written card text.</b> It drifts from the behaviour. Generate it from the modifiers. <small>cards</small></li>
+        <li><b>Two death hooks</b> (Dying Wish vs Rebirth's), so "Dying Wish" synergies skip Rebirth. One hook, tagged. <small>cards</small></li>
+        <li><b>Content mixed with presentation</b> (sounds, FX, sprites in each card branch). Keep them in a separate table. <small>cards</small></li>
+        <li><b>Invisible economy and dead modes shipped.</b> Publish odds; feature-flag and delete. <small>meta</small></li>
+      </ol>
+    </div>
+  </div>
+</section>
+
+<!-- UNKNOWNS -->
+<section id="unknowns">
+  <span class="num">08</span>
+  <h2>What stays unknown</h2>
+  <ul class="facts col">
+    <li>The practice and boss AI: server-side, not shipped. Boss decks and companion placement too.</li>
+    <li>Orb odds, prismatic chance, Gauntlet pick rarities and rewards, Rift points per game, season crate contents.</li>
+    <li>Whether the off-centre (5,2) spring was meant as a second-player catch-up. The code places it without comment.</li>
+    <li>Why card indices grow by random gaps. Hiding hidden-card counts is the likely reason, but no comment says so.</li>
+  </ul>
+</section>
+
+<footer>
+  <p>Built from four specs written against the unbundled code: rules engine, cards and modifiers, AI/bosses/challenges, meta and modes. Card numbers come from running the game's own rules engine in Node.</p>
+  <p>Extracted from a personally owned Steam copy, for study. No game assets are reproduced.</p>
+</footer>
+
+</div>
+
+<script>
+(() => {
+  // ---------- board ----------
+  const W = 9, H = 5, SPRINGS = ['4,0', '4,4', '5,2'];
+  const START = [
+    { id: 'g1', name: 'Player 1 General', side: 1, atk: 2, hp: 25, x: 0, y: 2, gen: true, kw: [] },
+    { id: 'ka', name: 'Kaido Assassin', side: 1, atk: 2, hp: 3, x: 3, y: 1, kw: ['Backstab'] },
+    { id: 'ws', name: 'Wind Shrike', side: 1, atk: 4, hp: 3, x: 1, y: 4, kw: ['Flying', 'Dying Wish'] },
+    { id: 'fs', name: 'Fire Spitter', side: 1, atk: 3, hp: 2, x: 1, y: 0, kw: ['Ranged'] },
+    { id: 'g2', name: 'Player 2 General', side: 2, atk: 2, hp: 25, x: 8, y: 2, gen: true, kw: [] },
+    { id: 'ps', name: 'Primus Shieldmaster', side: 2, atk: 3, hp: 6, x: 4, y: 2, kw: ['Provoke'] },
+    { id: 'hm', name: 'Healing Mystic', side: 2, atk: 2, hp: 3, x: 5, y: 0, kw: [] },
+    { id: 'rp', name: 'Rock Pulverizer', side: 2, atk: 1, hp: 4, x: 7, y: 3, kw: ['Provoke'] },
+  ];
+  let units, sel;
+  const bd = document.getElementById('bd');
+  const at = (x, y) => units.find(u => u.x === x && u.y === y);
+  const cheb = (a, b) => Math.max(Math.abs(a.x - b.x), Math.abs(a.y - b.y));
+  const provokers = u => units.filter(e => e.side !== u.side && e.kw.includes('Provoke') && cheb(e, u) <= 1);
+  function moves(u) {
+    if (provokers(u).length) return [];
+    const out = [];
+    if (u.kw.includes('Flying')) {
+      for (let x = 0; x < W; x++) for (let y = 0; y < H; y++) if (!at(x, y)) out.push([x, y]);
+      return out;
+    }
+    // breadth-first, 2 steps, through allies, never through enemies
+    const seen = new Set([u.x + ',' + u.y]); let front = [[u.x, u.y]];
+    for (let step = 0; step < 2; step++) {
+      const next = [];
+      for (const [x, y] of front) for (const [dx, dy] of [[1,0],[-1,0],[0,1],[0,-1]]) {
+        const nx = x + dx, ny = y + dy, k = nx + ',' + ny;
+        if (nx < 0 || ny < 0 || nx >= W || ny >= H || seen.has(k)) continue;
+        const o = at(nx, ny); seen.add(k);
+        if (o && o.side !== u.side) continue;
+        next.push([nx, ny]);
+        if (!o) out.push([nx, ny]);
+      }
+      front = next;
+    }
+    return out;
+  }
+  function targets(u) {
+    const pv = provokers(u);
+    const pool = pv.length ? pv : units.filter(e => e.side !== u.side);
+    return u.kw.includes('Ranged') ? pool : pool.filter(e => cheb(e, u) <= 1);
+  }
+  function why(u) {
+    const pv = provokers(u);
+    if (pv.length) return `Provoked by ${pv.map(p => p.name).join(' and ')}: it can't move, and it may only attack ${pv.length > 1 ? 'them' : 'it'}. Provoke is an aura that hands "Provoked" to every enemy next to it, and Provoked vetoes the move.`;
+    if (u.kw.includes('Flying')) return 'Flying is not a rule in the movement code. It just sets speed to 14, so the 2-step search reaches every empty tile.';
+    if (u.kw.includes('Ranged')) return 'Ranged sets attack reach to the whole board. Any enemy is a target from where it stands.';
+    if (u.kw.includes('Backstab')) return 'Moves 2 steps through allies, never through enemies. Attacking from behind its target adds 1 damage and switches off that counterattack.';
+    if (u.gen) return 'Generals are units like the others: 2 steps, melee reach on the 8 tiles around, and they get Provoked too.';
+    return 'Moves 2 steps through allies, never through enemies. Melee reach is the 8 tiles around, diagonals included.';
+  }
+  function render() {
+    const mv = sel ? moves(sel).map(m => m.join(',')) : [];
+    const tg = sel ? targets(sel).map(t => t.id) : [];
+    bd.innerHTML = '';
+    for (let y = H - 1; y >= 0; y--) for (let x = 0; x < W; x++) {
+      const b = document.createElement('button'); b.type = 'button';
+      const u = at(x, y), k = x + ',' + y;
+      if (SPRINGS.includes(k) && !u) b.classList.add('spring');
+      if (mv.includes(k)) b.classList.add('mv');
+      if (u && tg.includes(u.id)) b.classList.add('atk');
+      if (u && sel && u.id === sel.id) b.classList.add('sel');
+      b.setAttribute('aria-label', u ? `${u.name}, ${u.atk}/${u.hp}, at ${x},${y}` : `tile ${x},${y}${mv.includes(k) ? ', can move here' : ''}`);
+      if (u) b.innerHTML = `<span class="u p${u.side}${u.gen ? ' gen' : ''}">${u.atk}/${u.hp}</span>`;
+      b.onclick = () => {
+        if (u) sel = u;
+        else if (sel && mv.includes(k)) { sel.x = x; sel.y = y; }
+        else sel = null;
+        render();
+      };
+      bd.appendChild(b);
+    }
+    document.getElementById('pn-side').textContent = sel ? `Player ${sel.side}` + (sel.gen ? ' · General' : ' · minion') : 'Nothing selected';
+    document.getElementById('pn-name').textContent = sel ? sel.name : 'Click a unit';
+    document.getElementById('pn-stats').textContent = sel ? `${sel.atk} attack / ${sel.hp} health · at (${sel.x},${sel.y})` : '';
+    document.getElementById('pn-kw').innerHTML = sel ? sel.kw.map(k => `<span>${k}</span>`).join('') : '';
+    document.getElementById('pn-why').textContent = sel ? why(sel) : 'Select a unit to see its moves and targets.';
+  }
+  function reset() { units = START.map(u => ({ ...u, kw: [...u.kw] })); sel = units.find(u => u.id === 'ka'); render(); }
+  document.getElementById('bd-reset').onclick = reset;
+  reset();
+
+  // ---------- replay ----------
+  const TRACES = [
+    { units: { K: ['Kaido Assassin', 2, 3], M: ['Healing Mystic', 2, 3] }, frames: [
+      { ev: 'validate_action', note: 'You order Kaido Assassin to attack Healing Mystic. The validators check turn, range and exhaustion. It passes.', q: [], tree: [], hp: { K: 3, M: 3 } },
+      { ev: 'start_step', note: 'A step opens, the network and replay unit. The attack enters the queue.', q: ['Attack K→M'], tree: ['Attack K→M'], hp: { K: 3, M: 3 } },
+      { ev: 'before_action', note: "Before the hit lands, the Mystic's hidden Strikeback modifier queues a counterattack. That is why a defender that dies still hits back.", q: ['*Attack K→M', 'Counter M→K'], tree: ['Attack K→M', '  └ Counter M→K'], hp: { K: 3, M: 3 } },
+      { ev: 'action', note: 'The attack executes: 2 damage. Healing Mystic goes from 3 to 1 health.', q: ['*Attack K→M', 'Counter M→K'], tree: ['Attack K→M', '  └ Counter M→K'], hp: { K: 3, M: 1 }, hit: 'M' },
+      { ev: 'after_action', note: 'The attack is done and leaves the queue. The counter is next.', q: ['Counter M→K'], tree: ['Attack K→M', '  └ Counter M→K'], hp: { K: 3, M: 1 } },
+      { ev: 'action', note: "The counterattack executes: 2 damage, Kaido goes from 3 to 1. It's an implicit attack, and implicit attacks never trigger a counter, so it can't loop.", q: ['*Counter M→K'], tree: ['Attack K→M', '  └ Counter M→K'], hp: { K: 1, M: 1 }, hit: 'K' },
+      { ev: 'cleanup_action', note: 'The queue is empty. Cleanup runs for both actions, then every aura is re-checked.', q: [], tree: ['Attack K→M', '  └ Counter M→K'], hp: { K: 1, M: 1 } },
+      { ev: 'step', note: 'The step closes. The server records it and clients replay it. Kaido has attacked, so a move now is rejected: "This unit cannot move!"', q: [], tree: ['Attack K→M', '  └ Counter M→K'], hp: { K: 1, M: 1 } },
+    ] },
+    { units: { S: ['Wind Shrike', 4, 3] }, hand: true, frames: [
+      { ev: 'validate_action', note: 'Player 1 casts Phoenix Fire (3 damage) on Wind Shrike, a 4/3 with Dying Wish: draw a card. It passes.', q: [], tree: [], hp: { S: 3 }, hand: 5 },
+      { ev: 'start_step', note: 'A step opens and the card play enters the queue.', q: ['PlayCard'], tree: ['PlayCard'], hp: { S: 3 }, hand: 5 },
+      { ev: 'action', note: 'The card play executes. Its spell queues the damage behind it.', q: ['*PlayCard', 'Damage 3'], tree: ['PlayCard', '  └ Damage 3'], hp: { S: 3 }, hand: 5 },
+      { ev: 'action', note: '3 damage: the Shrike drops to 0 health. Lethal damage queues a DieAction.', q: ['*Damage 3', 'Die'], tree: ['PlayCard', '  └ Damage 3', '      └ Die'], hp: { S: 0 }, hand: 5, hit: 'S' },
+      { ev: 'action', note: 'The Shrike leaves the board. But a removed card keeps listening until its own death has been cleaned up.', q: ['*Die'], tree: ['PlayCard', '  └ Damage 3', '      └ Die'], hp: { S: 0 }, hand: 5, gone: 'S' },
+      { ev: 'action (Dying Wish)', note: "Still listening, its Dying Wish hears the DieAction that targets its own card and queues a draw for player 2.", q: ['*Die', 'Draw'], tree: ['PlayCard', '  └ Damage 3', '      └ Die', '          └ Draw  [random]'], hp: { S: 0 }, hand: 5, gone: 'S' },
+      { ev: 'action', note: "Player 2 draws: hand 5 → 6. The card is random, so only the server rolls it. Clients just receive the result.", q: ['*Draw'], tree: ['PlayCard', '  └ Damage 3', '      └ Die', '          └ Draw  [random]'], hp: { S: 0 }, hand: 6, gone: 'S' },
+      { ev: 'cleanup_action', note: "Cleanup. The dead Shrike's modifiers (Dying Wish, Flying, Strikeback) are stripped right away. Those removals run depth-first instead of waiting in the queue.", q: [], tree: ['PlayCard', '  └ Damage 3', '      └ Die', '          └ Draw  [random]', '              ├ remove Dying Wish', '              ├ remove Flying', '              └ remove Strikeback'], hp: { S: 0 }, hand: 6, gone: 'S' },
+      { ev: 'step', note: 'The death is cleaned up, so the Shrike finally stops listening. The step closes. A whole chain came from one click.', q: [], tree: ['PlayCard', '  └ Damage 3', '      └ Die', '          └ Draw  [random]', '              ├ remove Dying Wish', '              ├ remove Flying', '              └ remove Strikeback'], hp: { S: 0 }, hand: 6, gone: 'S' },
+    ] },
+  ];
+  let t = 0, f = 0;
+  const $ = id => document.getElementById(id);
+  function show() {
+    const tr = TRACES[t], fr = tr.frames[f];
+    $('rp-ev').textContent = fr.ev;
+    $('rp-note').textContent = fr.note;
+    $('rp-q').innerHTML = fr.q.length ? fr.q.map(a => a[0] === '*' ? `<span class="run">▶ ${a.slice(1)}</span>` : `<span>${a}</span>`).join('') : '<em>empty</em>';
+    $('rp-tree').textContent = fr.tree.length ? fr.tree.join('\n') : '(nothing yet)';
+    $('rp-units').innerHTML = Object.entries(tr.units).map(([k, [n, a]]) =>
+      `<div class="${fr.hit === k ? 'hit' : ''}${fr.gone === k ? ' gone' : ''}">${n}<b>${a} / ${fr.hp[k]}${fr.gone === k ? ' · removed, listening' : ''}</b></div>`).join('')
+      + (tr.hand ? `<div>Player 2 hand<b>${fr.hand} cards</b></div>` : '');
+    $('rp-count').textContent = `step ${f + 1} of ${tr.frames.length}`;
+    $('rp-prev').disabled = f === 0;
+    $('rp-next').disabled = f === tr.frames.length - 1;
+    document.querySelectorAll('[data-rp]').forEach(b => b.setAttribute('aria-pressed', String(+b.dataset.rp === t)));
+  }
+  $('rp-prev').onclick = () => { if (f > 0) { f--; show(); } };
+  $('rp-next').onclick = () => { if (f < TRACES[t].frames.length - 1) { f++; show(); } };
+  document.querySelectorAll('[data-rp]').forEach(b => b.onclick = () => { t = +b.dataset.rp; f = 0; show(); });
+  show();
+})();
+</script>
+
+
+</body>
+</html>
