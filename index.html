@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
-<meta name="description" content="How Duelyst's rules engine, cards, bosses and economy actually work, read from its unbundled JavaScript. Interactive board and engine replay.">
+<meta name="description" content="How Duelyst's rules engine, cards, bosses and economy actually work, read from its unbundled JavaScript. Interactive board, engine replay, and three new cards tested in the real engine.">
 <title>Duelyst dissected</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
@@ -173,6 +173,25 @@ td.score { font-family: var(--f-display); color: var(--amber); white-space: nowr
 .rp-units b { font-family: var(--f-mono); font-variant-numeric: tabular-nums }
 .rp-units .hit b { color: var(--rose) }
 .rp-units .gone { opacity: .55; border-style: dashed }
+
+.cards { display: grid; grid-template-columns: repeat(auto-fit, minmax(270px, 1fr)); gap: 28px; align-items: start }
+.cards > article { min-width: 0; display: grid; gap: 14px; align-content: start }
+.cface { --fc: var(--rose); background: var(--surface); border: 1px solid color-mix(in srgb, var(--fc) 55%, var(--line)); border-radius: 14px; overflow: hidden; display: grid; box-shadow: 0 0 0 1px color-mix(in srgb, var(--fc) 15%, transparent), 0 12px 32px -18px color-mix(in srgb, var(--fc) 60%, transparent) }
+.cface .art { position: relative; aspect-ratio: 1; background: #0b090d }
+.cface .art img { width: 100%; height: 100%; display: block; object-fit: cover; image-rendering: pixelated }
+.cface .gem { position: absolute; top: 10px; left: 10px; width: 46px; height: 46px; border-radius: 50%; display: grid; place-items: center; font: 700 1.5rem var(--f-display); color: #fff; background: radial-gradient(circle at 35% 30%, #8fb4ff, #3a4fd0 60%, #1d2470); border: 2px solid #c9d6ff; text-shadow: 0 1px 2px #000 }
+.cface .body { padding: 14px 16px 16px; display: grid; gap: 8px; text-align: center }
+.cface .name { font: 700 1.3rem/1.1 var(--f-display); text-wrap: balance }
+.cface .type { font: .72rem var(--f-mono); letter-spacing: .08em; text-transform: uppercase; color: var(--fc) }
+.cface .text { font-size: .98rem }
+.cface .text small { display: block; color: var(--muted); font-size: .82rem; margin-top: 4px }
+.cface .flav { font-style: italic; color: var(--muted); font-size: .88rem }
+.cface .stats { display: flex; justify-content: space-between; padding: 0 6px }
+.cface .stats span { font: 700 1.2rem var(--f-display); min-width: 54px; padding: 4px 10px; border-radius: 8px; background: var(--surface-2); border: 1px solid var(--line) }
+.cface .stats .a { color: var(--amber) } .cface .stats .h { color: var(--rose) }
+.cards dl { margin: 0; display: grid; gap: 8px; font-size: .92rem }
+.cards dt { font: .72rem var(--f-mono); letter-spacing: .08em; text-transform: uppercase; color: var(--muted) }
+.cards dd { margin: 0 }
 </style>
 
 <div class="wrap">
@@ -192,7 +211,7 @@ td.score { font-family: var(--f-display); color: var(--amber); white-space: nowr
 </header>
 
 <nav class="toc" aria-label="Contents">
-  <a href="#extraction">Extraction</a><a href="#board">Board &amp; turn</a><a href="#engine">Engine</a><a href="#cards">Cards</a><a href="#opponents">Opponents</a><a href="#meta">Meta</a><a href="#takeaways">Lessons</a><a href="#unknowns">Unknowns</a>
+  <a href="#extraction">Extraction</a><a href="#board">Board &amp; turn</a><a href="#engine">Engine</a><a href="#cards">Cards</a><a href="#opponents">Opponents</a><a href="#meta">Meta</a><a href="#takeaways">Lessons</a><a href="#newcards">New cards</a><a href="#unknowns">Unknowns</a>
 </nav>
 
 <!-- EXTRACTION -->
@@ -633,9 +652,71 @@ td.score { font-family: var(--f-display); color: var(--amber); white-space: nowr
   </div>
 </section>
 
+<!-- NEW CARDS -->
+<section id="newcards">
+  <span class="num">08</span>
+  <h2>Three new cards, played in the real engine</h2>
+  <p class="col">With the engine running in Node, the decompile becomes a workbench. These three cards use only pieces the engine already has, so it plays them unchanged. Each was loaded into a live game, played from hand and pushed into an edge case: 13 checks out of 13 pass. Two of them use modifiers that no collectible card ever carried.</p>
+  <div class="cards">
+    <article>
+      <div class="cface" style="--fc:var(--rose)">
+        <div class="art"><img src="cards/informant.webp" alt="Pixel art of a hooded crimson-armored spy raising a glowing lantern toward shadowed soldiers" width="640" height="640" loading="lazy"><div class="gem" aria-label="3 mana">3</div></div>
+        <div class="body">
+          <div class="name">Lantern Informant</div>
+          <div class="type">Songhai Empire · Minion · Rare</div>
+          <p class="text">Enemy minions around this are always Backstabbed.<small>They also can't counterattack, whoever attacks them.</small></p>
+          <div class="stats"><span class="a">2</span><span class="h">3</span></div>
+          <p class="flav">"Every back is turned to someone. I just tell you whose."</p>
+        </div>
+      </div>
+      <dl>
+        <dt>Built from</dt><dd>A generic radius-1 enemy aura carrying <code>ModifierAlwaysBackstabbed</code>. No collectible card uses that modifier; the only way to reach it was Massacre Artist's one-turn effect.</dd>
+        <dt>What the engine showed</dt><dd>A Kaido Assassin hitting from the front gets its +1 and takes no counter. The surprise: the Informant itself, with no Backstab, hits a 4/9 Golem and isn't countered either. Dispel removes the aura and everything it handed out.</dd>
+        <dt>Price</dt><dd>The budget for 3 mana with one line of text is about 6 stats; it has 5. A local, permanent cousin of a 4-mana Legendary, so Rare.</dd>
+      </dl>
+    </article>
+    <article>
+      <div class="cface" style="--fc:var(--prune)">
+        <div class="art"><img src="cards/shadowtrail.webp" alt="Pixel art of a shadow walker leaving glowing violet footprints, small wraiths rising from each" width="640" height="640" loading="lazy"><div class="gem" aria-label="1 mana">1</div></div>
+        <div class="body">
+          <div class="name">Shadowtrail</div>
+          <div class="type">Abyssian Host · Spell · Common</div>
+          <p class="text">Until your next turn, whenever an enemy minion is moved, summon a 1/1 Wraithling behind it.<small>Counts moves you force too: teleports and swaps.</small></p>
+          
+          <p class="flav">"Walk, then. It will be there when you stop."</p>
+        </div>
+      </div>
+      <dl>
+        <dt>Built from</dt><dd>Doom's spell class, aimed at your own General, carrying the <strong>Shadow Lord boss</strong> modifier <code>ModifierEnemyTeamMoveWatchSummonEntityBehind</code>, cut down to one turn and the Wraithling token.</dd>
+        <dt>What the engine showed</dt><dd>An enemy that walks leaves a Wraithling behind it. Nothing spawns on an occupied tile or off the board edge, enemy Generals don't trigger it, and it expires on time. It also fires when you teleport an enemy yourself with Mesmerize.</dd>
+        <dt>Price</dt><dd>It taxes the opponent's movement: they choose between handing you bodies and standing still. Next to Shadowstalk (2 mana, guaranteed), 1 mana may be generous; worth testing at 2.</dd>
+      </dl>
+    </article>
+    <article>
+      <div class="cface" style="--fc:var(--amber)">
+        <div class="art"><img src="cards/crest.webp" alt="Pixel art of a bone and bronze dinosaur-frill crest set with a glowing amber egg gem" width="640" height="640" loading="lazy"><div class="gem" aria-label="2 mana">2</div></div>
+        <div class="body">
+          <div class="name">Clutchwarden's Crest</div>
+          <div class="type">Magmar Aspects · Artifact · Rare</div>
+          <p class="text">Your General gains +1 Attack and Provoke.<small>Breaks after 3 hits on your General, like any artifact.</small></p>
+          
+          <p class="flav">"The mother does not chase. She stands over the clutch and waits."</p>
+        </div>
+      </div>
+      <dl>
+        <dt>Built from</dt><dd>Iridium Scale's artifact class carrying <code>ModifierProvoke</code> and a +1 attack buff. Magmar has no Provoke at all, and no printed card gives a General Provoke.</dd>
+        <dt>What the engine showed</dt><dd>An enemy next to your General can no longer reach the minion it guards and has to hit the General. Dispel can't touch it. The third hit breaks it and the Provoke goes with it.</dd>
+        <dt>Price</dt><dd>It limits itself: Provoke pulls hits onto your General, and every hit costs the artifact a charge. The more it protects, the faster it breaks.</dd>
+      </dl>
+    </article>
+  </div>
+  <p class="callout col">The engine also caught a rule no card mentions. The first test showed the Crest breaking after one hit. Drawing from an empty deck damages your own General, and that hit costs every artifact a charge. The test decks were refilled; the card didn't change.</p>
+  <p class="col" style="font-size:.85rem;color:var(--muted)">Card art made for this page with an image model (Grok Imagine via Higgsfield), prompted for Duelyst-like pixel art. None of it comes from the game.</p>
+</section>
+
 <!-- UNKNOWNS -->
 <section id="unknowns">
-  <span class="num">08</span>
+  <span class="num">09</span>
   <h2>What stays unknown</h2>
   <ul class="facts col">
     <li>The practice and boss AI: server-side, not shipped. Boss decks and companion placement too.</li>
