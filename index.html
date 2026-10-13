@@ -192,6 +192,9 @@ td.score { font-family: var(--f-display); color: var(--amber); white-space: nowr
 .cards dl { margin: 0; display: grid; gap: 8px; font-size: .92rem }
 .cards dt { font: .72rem var(--f-mono); letter-spacing: .08em; text-transform: uppercase; color: var(--muted) }
 .cards dd { margin: 0 }
+
+@media (max-width: 640px) { nav.toc { flex-wrap: nowrap; overflow-x: auto; scrollbar-width: none; white-space: nowrap } nav.toc::-webkit-scrollbar { display: none } }
+.cards dd code { overflow-wrap: anywhere }
 </style>
 
 <div class="wrap">
